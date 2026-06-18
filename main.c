@@ -38,6 +38,7 @@ monitor_buffer_t *caixa;
 monitor_buffer_t *fila;
 int vezes_interagem;
 int finalizou_interacoes = 0;
+int alguem_em_atendimento = 0;
 
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
@@ -207,7 +208,12 @@ void entrar_fila(Pessoa pessoa) {
 int verificar() {
     while (finalizou_interacoes == 0) {
         sleep(5);
-        pthread_cond_signal(&caixa->nao_cheio);
+        if (alguem_em_atendimento == 0 && caixa->fila.inicio != NULL) {
+            printf("Gerente detectou deadlock, liberando %s para atendimento\n", caixa->fila.inicio->pessoa.nome);
+            pthread_cond_signal(&caixa->nao_cheio);
+            pthread_mutex_unlock(&caixa->mutex);
+            caixa->contador = 0;
+        }   
     }
 }
 
@@ -228,9 +234,11 @@ int *pessoa(void *args) {
         printf("%s está na fila do caixa\n", info_pessoa->nome);
         entrar_fila(*info_pessoa);
         esperar(*info_pessoa);
-    
+        
+        alguem_em_atendimento = 1;
         printf("%s está sendo atendido(a)\n", info_pessoa->nome);
         sleep(5);
+        alguem_em_atendimento = 0;
     
         printf("%s vai para casa\n", info_pessoa->nome);
         liberar();
