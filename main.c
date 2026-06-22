@@ -89,7 +89,7 @@ Pessoa remover_fila() {
     return pessoa;
 }
 
-// Função responsável por inicializar os monitores
+// Função responsável por inicializar o monitor do caixa
 void inicia_monitor_caixa() {
     caixa = (monitor_buffer_t*) malloc(sizeof(monitor_buffer_t));
     if (caixa == NULL) {
@@ -124,10 +124,13 @@ void inicia_monitor_caixa() {
         exit(1);
     }  
 }
+
+// Função responsável por inicializar o monitor da fila
 void inicia_monitor_fila() {
     fila = (monitor_buffer_t*) malloc(sizeof(monitor_buffer_t));
     if (fila == NULL) {
         printf("Erro ao alocar memória.\n");
+        free(caixa);
         exit(1);
     }
 
@@ -140,6 +143,7 @@ void inicia_monitor_fila() {
     if (pthread_mutex_init(&fila->mutex, NULL) != 0) {
         printf("Erro ao inicializar mutex.\n");
         free(fila);
+        free(caixa);
         exit(1);
     }
 
@@ -147,6 +151,7 @@ void inicia_monitor_fila() {
         printf("Erro ao inicializar condição produzida.\n");
         pthread_mutex_destroy(&fila->mutex);
         free(fila);
+        free(caixa);
         exit(1);
     }
 
@@ -155,6 +160,7 @@ void inicia_monitor_fila() {
         pthread_cond_destroy(&fila->nao_vazio);
         pthread_mutex_destroy(&fila->mutex);
         free(fila);
+        free(caixa);
         exit(1);
     }  
 }
@@ -271,7 +277,7 @@ int main (int argc, char *argv []) {
     inicia_monitor_caixa();
     inicia_monitor_fila();
 
-    // Cria threads das pessoas
+    // Cria threads das pessoas e gerente
     int prioridades[] = {4, 4, 3, 3, 2, 2, 1, 1};
     char *nomes[] = {"Maria", "Marcos", "Vanda", "Valter", "Paula", "Pedro", "Sueli", "Silas"};
 
@@ -282,7 +288,6 @@ int main (int argc, char *argv []) {
 
         pthread_create(&threads[i], NULL, pessoa, &pessoas[i]);
     }
-
     pthread_create(&gerente, NULL, verificar, NULL);
 
     // Transmite o broadcast
@@ -300,6 +305,8 @@ int main (int argc, char *argv []) {
     finalizou_interacoes = 1;
     pthread_join(gerente, NULL);
 
+    // Finaliza sistema
     free(caixa);
+    free(fila);
     return 0; 
 }
