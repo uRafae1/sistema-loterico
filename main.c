@@ -11,13 +11,14 @@
 
 // Structs
 typedef struct {
+    int id;
     char *nome;
-    int prioridade_base;
+    char prioridade_base;
     pthread_cond_t pode_ir;
 } Pessoa;
 
 typedef struct No {
-    int prioridade;
+    char prioridade;
     Pessoa *pessoa;
     struct No *proximo;
 } No;
@@ -46,6 +47,55 @@ pthread_mutex_t mutex_broadcast = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t cond_broadcast = PTHREAD_COND_INITIALIZER;
 int pronto = 0;
 
+// Verifica prioridade
+void chama_prioridade_maior() {
+
+    No *atual = caixa->fila.inicio;
+
+    int tem_g = FALSE;
+    int tem_i = FALSE;
+    int tem_d = FALSE;
+
+    // Verifica quais prioridades existem na fila
+    while (atual != NULL) {
+        if (atual->pessoa->prioridade_base == 'G') {
+            tem_g = TRUE;
+        } else if (atual->pessoa->prioridade_base == 'I') {
+            tem_i = TRUE;
+        } else if (atual->pessoa->prioridade_base == 'D') {
+            tem_d = TRUE;
+        }
+        atual = atual->proximo;
+    }
+
+    if (tem_g && tem_i && tem_d) {
+        printf("DEADLOCK!\n");
+        return;
+    }
+
+    No *prioridade_maior = caixa->fila.inicio;
+    atual = caixa->fila.inicio->proximo;
+
+    while (atual != NULL) {
+        char atual_prioridade = atual->pessoa->prioridade_base;
+        char maior_prioridade = prioridade_maior->pessoa->prioridade_base;
+        if ((atual_prioridade == 'G' && maior_prioridade == 'I') ||
+            (atual_prioridade == 'I' && maior_prioridade == 'D') ||
+            (atual_prioridade == 'D' && maior_prioridade == 'G')) {
+            prioridade_maior = atual;
+        }
+
+        if (maior_prioridade == 'C') {
+            prioridade_maior = atual;
+        }
+
+        atual = atual->proximo;
+    }
+
+    // printf("Enviando sinal para %s\n", prioridade_maior->pessoa->nome);
+    pthread_cond_signal(&prioridade_maior->pessoa->pode_ir);
+}
+
 // Insere um elemento mantendo a ordem de prioridade
 void inserir_fila(Pessoa *pessoa) {
     No *novo = (No *) malloc(sizeof(No));
@@ -54,37 +104,50 @@ void inserir_fila(Pessoa *pessoa) {
     novo->pessoa = pessoa;
     novo->proximo = NULL;
 
-    if (caixa->fila.inicio == NULL || pessoa->prioridade_base > caixa->fila.inicio->prioridade) {
+    if (caixa->fila.inicio == NULL) {
         novo->proximo = caixa->fila.inicio;
         caixa->fila.inicio = novo;
 
     } else {
         No *atual = caixa->fila.inicio;
-        while (atual->proximo != NULL && atual->proximo->prioridade >= pessoa->prioridade_base) {
+        while (atual->proximo != NULL) {
             atual = atual->proximo;
         }
-
         novo->proximo = atual->proximo;
         atual->proximo = novo;
-
-        // No *ultrapassado = novo->proximo;
-        // while (ultrapassado != NULL) {
-        //     printf("Gerente detectou inanição, aumentando prioridade de %s\n", ultrapassado->pessoa->nome);
-        //     ultrapassado->prioridade++;
-        //     ultrapassado = ultrapassado->proximo;
-        // }
     }
+
+    // No *impressao = caixa->fila.inicio;
+    // printf("FILA: ");
+    // while (impressao != NULL) {
+    //     printf("%s, ", impressao->pessoa->nome);
+    //     impressao = impressao->proximo;
+    // }
+    // printf("\n");
 }
 
-// Remove o elemento de maior prioridade (primeiro da lista)
-void remover_fila() {
+// Remove o elemento de maior prioridade
+void remover_fila(int id) {
     if (caixa->fila.inicio == NULL) {
-        printf("Fila vazia!\n");
         return;
     }
 
-    No *removido = caixa->fila.inicio;
-    caixa->fila.inicio = removido->proximo;
+    No *atual = caixa->fila.inicio;
+    No *anterior = NULL;
+
+    while (atual != NULL) {
+        if (atual->pessoa->id == id) {
+            if (anterior == NULL) {
+                caixa->fila.inicio = atual->proximo;
+            } else {
+                anterior->proximo = atual->proximo;
+            }
+            free(atual);
+            return;
+        }
+        anterior = atual;
+        atual = atual->proximo;
+    }
 }
 
 // Função responsável por inicializar o monitor do caixa
@@ -169,7 +232,7 @@ void esperar(Pessoa *pessoa) {
     }
 
     caixa->usando = TRUE;
-    remover_fila();
+    remover_fila(pessoa->id);
     printf("%s está sendo atendido(a)\n", pessoa->nome);
 
     pthread_mutex_unlock(&caixa->mutex);
@@ -182,7 +245,7 @@ void liberar(Pessoa *pessoa) {
     printf("%s vai para casa\n", pessoa->nome);
 
     if (caixa->fila.inicio != NULL) {
-        pthread_cond_signal(&caixa->fila.inicio->pessoa->pode_ir);
+        chama_prioridade_maior();
     }
     pthread_mutex_unlock(&caixa->mutex);
 }
@@ -205,9 +268,10 @@ void entrar_fila(Pessoa *pessoa) {
 
 // Função responsável controlar interações do gerente
 int *gerente() {
-    while (finalizou_interacoes == 0) {
+    while (caixa->fila.inicio != NULL) {
         sleep(5);
-        if (caixa->usando = FALSE && caixa->fila.inicio != NULL) {
+        if (caixa->usando == FALSE) {
+            // TODO: CHAMAR ALEATORIO CASO DO DEADLOCK (G && I && D) E VALIDAR INANIÇÂO
             printf("Gerente detectou deadlock, liberando %s para atendimento\n", caixa->fila.inicio->pessoa->nome);
             pthread_cond_signal(&caixa->fila.inicio->pessoa->pode_ir);
         }   
@@ -264,16 +328,17 @@ int main (int argc, char *argv []) {
 
     // Cria threads das pessoas e gerente
     char *nomes[] = {"Maria", "Marcos", "Vanda", "Valter", "Paula", "Pedro", "Sueli", "Silas"};
-    int prioridades[] = {4, 4, 3, 3, 2, 2, 1, 1};
+    int prioridades[] = {'G', 'G', 'I', 'I', 'D', 'D', 'C', 'C'};
 
     for (int i = 0; i < NUM_PESSOAS; i++) {
+        pessoas[i].id = i;
         pessoas[i].nome = nomes[i];
         pessoas[i].prioridade_base = prioridades[i];
         pthread_cond_init(&pessoas[i].pode_ir, NULL);
 
         pthread_create(&threads[i], NULL, pessoa, &pessoas[i]);
     }
-    // pthread_create(&thread_gerente, NULL, gerente, NULL);
+    pthread_create(&thread_gerente, NULL, gerente, NULL);
 
     // Transmite o broadcast para as pessoas iniciarem
     pthread_mutex_lock(&mutex_broadcast);
