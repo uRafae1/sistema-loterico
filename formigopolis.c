@@ -29,7 +29,7 @@ typedef struct Fila {
 
 typedef struct {
     Fila fila;
-    int usando;
+    int usando, deadlock, quem_usa;
     pthread_mutex_t mutex;
     pthread_cond_t caixa_ocupado;
     pthread_cond_t caixa_livre;
@@ -43,6 +43,10 @@ int vezes_interagem;
 int finalizou_interacoes = 0;
 int alguem_em_atendimento = 0;
 
+int atendeu_idoso = FALSE;
+int atendeu_gravida = FALSE;
+int atendeu_deficiente = FALSE;
+
 pthread_mutex_t mutex_broadcast = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t cond_broadcast = PTHREAD_COND_INITIALIZER;
 int pronto = 0;
@@ -51,6 +55,9 @@ int pronto = 0;
 void chama_prioridade_maior() {
 
     No *atual = caixa->fila.inicio;
+    if (atual == NULL) {
+        return;
+    }
 
     int tem_g = FALSE;
     int tem_i = FALSE;
@@ -69,12 +76,12 @@ void chama_prioridade_maior() {
     }
 
     if (tem_g && tem_i && tem_d) {
-        printf("DEADLOCK!\n");
+        caixa->deadlock = TRUE;
+        caixa->quem_usa = -1;
         return;
     }
 
     No *prioridade_maior = caixa->fila.inicio;
-    atual = caixa->fila.inicio->proximo;
 
     while (atual != NULL) {
         char atual_prioridade = atual->pessoa->prioridade_base;
@@ -92,7 +99,19 @@ void chama_prioridade_maior() {
         atual = atual->proximo;
     }
 
-    // printf("Enviando sinal para %s\n", prioridade_maior->pessoa->nome);
+    switch (prioridade_maior->pessoa->prioridade_base) {
+        case 'I':
+            atendeu_idoso = TRUE;
+            break;
+        case 'G':
+            atendeu_gravida = TRUE;
+            break;
+        case 'D':
+            atendeu_deficiente = TRUE;
+            break;
+    }
+
+    caixa->quem_usa = prioridade_maior->pessoa->id;
     pthread_cond_signal(&prioridade_maior->pessoa->pode_ir);
 }
 
@@ -116,14 +135,6 @@ void inserir_fila(Pessoa *pessoa) {
         novo->proximo = atual->proximo;
         atual->proximo = novo;
     }
-
-    // No *impressao = caixa->fila.inicio;
-    // printf("FILA: ");
-    // while (impressao != NULL) {
-    //     printf("%s, ", impressao->pessoa->nome);
-    //     impressao = impressao->proximo;
-    // }
-    // printf("\n");
 }
 
 // Remove o elemento de maior prioridade
@@ -160,7 +171,9 @@ void inicia_monitor_caixa() {
 
     // Inicializar os campos da struct
     caixa->usando = FALSE;
+    caixa->deadlock = FALSE;
     caixa->fila.inicio = NULL;
+    caixa->quem_usa = -1;
 
     // Inicializar o mutex e as variáveis de condição
     if (pthread_mutex_init(&caixa->mutex, NULL) != 0) {
@@ -227,7 +240,7 @@ void inicia_monitor_fila() {
 void esperar(Pessoa *pessoa) {
     pthread_mutex_lock(&caixa->mutex);
 
-    while (caixa->usando == TRUE) {
+    while ((caixa->usando == TRUE && caixa->deadlock == FALSE) || caixa->quem_usa != pessoa->id) {
         pthread_cond_wait(&pessoa->pode_ir, &caixa->mutex);
     }
 
@@ -253,7 +266,7 @@ void liberar(Pessoa *pessoa) {
 // Função responsável para entrar na fila
 void entrar_fila(Pessoa *pessoa) {
     pthread_mutex_lock(&fila->mutex);
-    while (fila->usando == TRUE) {
+    while (fila->usando == TRUE || caixa->deadlock == TRUE) {
         pthread_cond_wait(&fila->usar_fila, &fila->mutex);
     }
 
@@ -262,19 +275,65 @@ void entrar_fila(Pessoa *pessoa) {
     printf("%s está na fila do caixa\n", pessoa->nome);
     fila->usando = FALSE;
 
+    if (caixa->quem_usa == -1) {
+        caixa->quem_usa = pessoa->id;
+    }
+
     pthread_cond_signal(&fila->usar_fila);
     pthread_mutex_unlock(&fila->mutex);
 }
 
 // Função responsável controlar interações do gerente
 int *gerente() {
-    while (caixa->fila.inicio != NULL) {
+    sleep(1);
+    while (finalizou_interacoes == FALSE) {
         sleep(5);
-        if (caixa->usando == FALSE) {
-            // TODO: CHAMAR ALEATORIO CASO DO DEADLOCK (G && I && D) E VALIDAR INANIÇÂO
-            printf("Gerente detectou deadlock, liberando %s para atendimento\n", caixa->fila.inicio->pessoa->nome);
-            pthread_cond_signal(&caixa->fila.inicio->pessoa->pode_ir);
+        if (caixa->usando == FALSE && caixa->deadlock == TRUE) {
+            No *chama_pessoa = caixa->fila.inicio;
+
+            if (chama_pessoa != NULL) {
+                while (chama_pessoa->pessoa->prioridade_base == 'C' && chama_pessoa->proximo != NULL) {
+                    chama_pessoa = chama_pessoa->proximo;
+                }
+    
+                printf("Gerente detectou deadlock, liberando %s para atendimento\n", chama_pessoa->pessoa->nome);
+                caixa->deadlock = FALSE;
+                caixa->quem_usa = chama_pessoa->pessoa->id;
+    
+                switch (chama_pessoa->pessoa->prioridade_base) {
+                    case 'I':
+                        atendeu_idoso = TRUE;
+                        break;
+                    case 'G':
+                        atendeu_gravida = TRUE;
+                        break;
+                    case 'D':
+                        atendeu_deficiente = TRUE;
+                        break;
+                }
+    
+                pthread_cond_signal(&chama_pessoa->pessoa->pode_ir);
+            }
         }   
+
+        if (atendeu_deficiente == TRUE && atendeu_gravida == TRUE && atendeu_idoso == TRUE) {
+            No *aumenta_prioridade = caixa->fila.inicio;
+            if (aumenta_prioridade != NULL) {
+                while (aumenta_prioridade->pessoa->prioridade_base != 'C' && aumenta_prioridade->proximo != NULL) {
+                    aumenta_prioridade = aumenta_prioridade->proximo;
+                }
+
+                if (aumenta_prioridade->pessoa->prioridade_base == 'C') {
+                    printf("Gerente detectou inanição, aumentando prioridade de %s\n", aumenta_prioridade->pessoa->nome);
+                    aumenta_prioridade->pessoa->prioridade_base = 'G';
+
+                    atendeu_idoso = FALSE;
+                    atendeu_gravida = FALSE;
+                    atendeu_deficiente = FALSE;
+                }   
+            }
+            
+        }
     }
 }
 
@@ -299,9 +358,8 @@ int *pessoa(void *args) {
         liberar(info_pessoa);
 
         // Espera final antes de recomeçar
-        if (i == vezes_interagem - 1) {
-            sleep(((rand() % 3) + 1));
-        }
+        sleep(5);
+        // sleep(((rand() % 3) + 1));
     }
 }
 
@@ -352,7 +410,7 @@ int main (int argc, char *argv []) {
     }
 
     // Avisa para o gerente que finalizou as interações
-    finalizou_interacoes = 1;
+    finalizou_interacoes = TRUE;
     pthread_join(thread_gerente, NULL);
 
     // Finaliza sistema

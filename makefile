@@ -2,13 +2,13 @@
 CC = gcc
 
 # Nome do executável
-TARGET = threads
+TARGET = formigopolis
 
 # Quantidade de vezes que os clientes vão ter que passar no caixa
-VEZES ?= 1 
+VEZES ?= 2
 
 # Código
-SRC = main.c
+SRC = formigopolis.c
 
 # Nome da regra para ser compilada
 all: $(TARGET) 
